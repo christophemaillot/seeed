@@ -1,0 +1,38 @@
+let abcd = "test"
+
+let conf_file = <<<CONF
+test
+TATA>>>>
+<<<CONF
+toto ti
+CONF>>>
+
+# simple exemple to show
+# that is works
+
+echo("hello world")
+
+echo("updating the system")
+
+
+| apt-get update
+
+| apt-get install nginx
+
+echo("installing the system")
+
++
+| apt-get update
+| apt-get install nginx
+| apt-get install php
+| echo "done" > /tmp/done
++
+
+# this is a comment
+
+let content = <<<HEREDOC
+coucou
+tat
+HEREDOC>>>
+
+upload(content,"/tmp/content")

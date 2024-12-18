@@ -1,0 +1,13 @@
+[package]
+name = "seeed"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.23", features = ["derive"] }
+colored = "2.2.0"
+chumsky = "0.9.3"
+thiserror = "2.0.7"
+ssh2 = "0.9.4"
+uuid = { version = "1.11.0", features = ["v4"] }
+regex = "1.11.1"

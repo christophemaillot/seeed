@@ -1,0 +1,10 @@
+# test script
+
+echo("updating the server")
+
++
+|  apt-get update
+|  echo "test" > /tmp/test
+|  cat /tmp/test
++ 
+
