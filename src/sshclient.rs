@@ -1,9 +1,9 @@
-
+use std::io::BufReader;
 use std::io::prelude::*;
 use std::net::{TcpStream};
 use std::path::Path;
 use colored::Colorize;
-use ssh2::Session;
+use ssh2::{OpenFlags, OpenType, Session};
 use crate::error::SeeedError;
 
 pub struct SshClient {
@@ -109,17 +109,29 @@ impl SshClient {
         let mut channel = session.channel_session()?;
         channel.exec(format!("/bin/bash {}", remote_script_path).as_str())?;
 
-        // read the output
-        let mut stdout = String::new();
-        channel.read_to_string(&mut stdout)?;
+        // pipe channel to a formater
+        let mut stderr_reader = BufReader::new(channel.stderr());
+        let mut stdout_reader = BufReader::new(channel);
 
-        println!("{}", stdout.split("\n")
-            .map(|s| format!("   │ {}", s.yellow()))
-            .collect::<Vec<String>>()
-            .join("\n"));
-
-        channel.wait_close()?;
-        //println!("{}", channel.exit_status().unwrap());
+        let mut line = String::new();
+        loop {
+            let r = stdout_reader.read_line(&mut line)?;
+            if r == 0 {
+                break;
+            } else {
+                print!("   | {}", line.yellow());  // print and not println, line already as the newline
+                line.clear();
+            }
+        }
+        loop {
+            let r = stderr_reader.read_line(&mut line)?;
+            if r == 0 {
+                break;
+            } else {
+                print!("   | {}", line.red());  // print and not println, line already as the newline
+                line.clear();
+            }
+        }
 
         // remove the script from the remote target
         sftp.unlink(path)?;

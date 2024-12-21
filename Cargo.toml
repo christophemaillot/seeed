@@ -11,3 +11,5 @@ thiserror = "2.0.7"
 ssh2 = "0.9.4"
 uuid = { version = "1.11.0", features = ["v4"] }
 regex = "1.11.1"
+minijinja = "2.5.0"
+serde = { version = "1.0.216", features = ["derive"] }

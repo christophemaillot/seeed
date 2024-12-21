@@ -2,10 +2,19 @@ use std::collections::HashMap;
 use crate::parser::{script_parser, Expr, ScriptItem};
 
 use chumsky::Parser;
+use minijinja::Environment;
 use crate::error::SeeedError;
 use crate::built_in_functions::execute_function;
 use crate::sshclient::SshClient;
 
+/// The script execution context
+///
+/// contains :
+/// - the script content itself,
+/// - a ssh client connected to the remote host,
+/// - the defined variables and their values
+/// and provides a set of utility methods
+///
 pub struct ScriptContext {
     target: String,
     use_sudo: bool,
@@ -15,6 +24,9 @@ pub struct ScriptContext {
 }
 
 impl ScriptContext {
+
+    /// build a ne script context with default parameters
+    ///
     pub fn new(target: String, use_sudo: bool, contents: String) -> Self {
         Self {
             target,
@@ -48,8 +60,11 @@ impl ScriptContext {
                 ScriptItem::RemoteSingle(s) => {
                     self.ssh_client.run(s.as_str())?;
                 },
-                ScriptItem::Remote(s) => {
-                    self.ssh_client.run(s.join("\n").as_str())?;
+                ScriptItem::Remote(lines) => {
+                    let content = self.resolve_template(
+                        lines.join("\n").as_str()
+                    )?;
+                    self.ssh_client.run(&content)?;
                 },
                 ScriptItem::Comment() => {
                     // ignore comments
@@ -58,7 +73,7 @@ impl ScriptContext {
                     // ignore empty lines
                 }
                 ScriptItem::FnCall(name, args) => {
-                    execute_function(&name, args, &self)?;
+                    execute_function(&name, args, self)?;
                 },
                 ScriptItem::VarAssign(name, value) => {
                     self.variables.insert(name, value);
@@ -68,30 +83,47 @@ impl ScriptContext {
         Ok(())
     }
 
-    pub(crate) fn deref_vars(&self, args:&Vec<Expr>) -> Result<Vec<Expr>, SeeedError> {
+    /// expand an expression item to a litteral expression
+    ///
+    /// If the exp is a variable, replace it by its actual value,
+    /// if the exp is a string or here doc : apply the template engine
+    pub(crate) fn expand_expr(&mut self, expr: &Expr) -> Result<Expr, SeeedError> {
 
-        let mut resolved_args:Vec<Expr> = Vec::new();
-
-        for arg in args {
-            match arg {
-                Expr::Variable(name) => {
-                    let var = self.variables.get(name);
-                    match var {
-                        None => {
-                            return Err(SeeedError::UndefinedVar(name.clone()))
-                        }
-                        Some(val) => {
-                            resolved_args.push(val.clone());
-                        }
+        let expr = match expr {
+            Expr::Variable(name) => {
+                let var = self.variables.get(name);
+                match var {
+                    None => {
+                        return Err(SeeedError::UndefinedVar(name.clone()))
+                    }
+                    Some(val) => {
+                        val.clone()
                     }
                 }
-                _ => {
-                    resolved_args.push(arg.clone());
-                }
             }
-        }
+            _ => expr.clone(),
+        };
 
-        Ok(resolved_args)
+        let expr: Result<Expr, SeeedError> = match expr {
+            Expr::String(source) => {
+                Ok(Expr::String(self.resolve_template(&source)?))
+            }
+            Expr::HereDoc(doc) => {
+                Ok(Expr::HereDoc(self.resolve_template(&doc)?))
+            }
+            _ => Ok(expr)
+        };
+
+        Ok(expr?)
+    }
+
+
+    pub(crate) fn resolve_template(&self, source:&str) -> Result<String, SeeedError> {
+        let mut env = Environment::new();
+        env.add_template("template", source)?;
+        let tmpl = env.get_template("template")?;
+        let result = tmpl.render(&self.variables)?;
+        Ok(result)
     }
 }
 

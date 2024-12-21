@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use chumsky::{Parser, prelude::*,};
 use chumsky::text::{ident};
-
+use serde::{Serialize, Serializer};
 
 pub struct Script {
     pub items: Vec<ScriptItem>,
@@ -28,6 +28,19 @@ pub enum Expr {
     String(String),
     HereDoc(String),
     Variable(String),
+}
+
+impl Serialize for Expr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer
+    {
+        match self {
+            Self::String(s) => serializer.serialize_str(s),
+            Self::HereDoc(s) => serializer.serialize_str(s),
+            Self::Variable(s) => serializer.serialize_str(s),
+        }
+    }
 }
 
 impl Display for Expr {

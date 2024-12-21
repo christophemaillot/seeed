@@ -1,5 +1,7 @@
 let abcd = "test"
 
+echo("message is {{ abcd }} !")
+
 let conf_file = <<<CONF
 test
 TATA>>>>

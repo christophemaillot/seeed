@@ -27,4 +27,7 @@ pub enum SeeedError {
 
     #[error("undefined variable {0}")]
     UndefinedVar(String),
+
+    #[error("template error {0}")]
+    Template(#[from] minijinja::Error),
 }
