@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use crate::parser::{script_parser, Expr, ScriptItem};
-
-use chumsky::Parser;
+use colored::Colorize;
 use minijinja::Environment;
+
+use crate::parser::{script_parser, Expression, Literal, Statement};
 use crate::error::SeeedError;
-use crate::built_in_functions::execute_function;
+use crate::built_in_functions;
 use crate::sshclient::SshClient;
 
 /// The script execution context
@@ -19,13 +19,13 @@ pub struct ScriptContext {
     target: String,
     use_sudo: bool,
     contents: String,
-    variables: HashMap<String, Expr>,
+    variables: HashMap<String, Literal>,
     pub(crate) ssh_client: SshClient,
 }
 
 impl ScriptContext {
 
-    /// build a ne script context with default parameters
+    /// build a new script context with default parameters
     ///
     pub fn new(target: String, use_sudo: bool, contents: String) -> Self {
         Self {
@@ -37,17 +37,30 @@ impl ScriptContext {
         }
     }
 
+    /// Loads a environment file and sets the corresponding variables
+    pub(crate) fn load_env(&mut self, filename: &str) -> Result<(), SeeedError> {
+        let env_variables = env_file_reader::read_file(filename)?;
+
+        env_variables.iter().for_each(|(name, value)| {
+            self.variables.insert(name.clone(), Literal::String(value.clone()));
+        });
+
+        Ok(())
+    }
+
+    /// Main method that runs the script
+    ///
     pub(crate) fn run(&mut self, debug: bool) -> Result<(), SeeedError> {
 
         // parse the script
-        let script = script_parser().parse(self.contents.as_str()).unwrap();
+        let script = script_parser().parse(self.contents.as_bytes())?;
 
+        // if debug flag is set,
         if debug {
             println!("script content :");
-            script.items.iter().for_each(|item| {
+            script.statements.iter().for_each(|item| {
                 println!("> {:?}", item);
             });
-            return Ok(())
         }
 
         // instanciate the ssh client
@@ -55,66 +68,114 @@ impl ScriptContext {
         self.ssh_client.command("mkdir -p /var/lib/seeed/")?;
 
         // execute the script
-        for item in script.items {
-            match item {
-                ScriptItem::RemoteSingle(s) => {
-                    self.ssh_client.run(s.as_str())?;
-                },
-                ScriptItem::Remote(lines) => {
-                    let content = self.resolve_template(
-                        lines.join("\n").as_str()
-                    )?;
-                    self.ssh_client.run(&content)?;
-                },
-                ScriptItem::Comment() => {
-                    // ignore comments
-                }
-                ScriptItem::EmptyLine() => {
-                    // ignore empty lines
-                }
-                ScriptItem::FnCall(name, args) => {
-                    execute_function(&name, args, self)?;
-                },
-                ScriptItem::VarAssign(name, value) => {
-                    self.variables.insert(name, value);
+        for statement in script.statements {
+            self.execute_statement(&statement)?;
+        }
+
+        Ok(())
+    }
+
+    fn execute_statement(&mut self, statement: &Statement) -> Result<(), SeeedError> {
+        match statement {
+
+            Statement::Comment(_) => {
+                // nothing to do
+            }
+
+            Statement::EmptyLine() => {
+                // nothing to do
+            }
+
+            Statement::Assign(name, expression) => {
+                let literal = self.evaluate(&expression)?;
+                self.variables.insert(name.clone(), literal);
+            }
+            Statement::RemoteSingle(line) => {
+                println!("    | {}", line.blue().bold());
+            }
+            Statement::Remote(lines) => {
+                let line = lines.join("\n");
+                let line = self.resolve_template(&line)?;
+
+                self.ssh_client.run(line.as_str())?;
+            }
+            Statement::FnCall(name, args) => {
+
+                let dst_args: Vec<Result<Literal, SeeedError>> = args
+                    .iter()
+                    .map(|arg| self.evaluate(arg))
+                    .collect();
+
+                let dst_args = dst_args.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+                self.call_builtin_function(name, dst_args)?;
+            }
+            Statement::ForLoop(varname, expression, statements) => {
+
+                let literal = self.evaluate(expression)?;
+
+                if let Literal::Array(literals) = literal {
+                    for literal in literals {
+                        self.variables.insert(varname.clone(), literal.clone());
+                        for statement in statements {
+                            self.execute_statement(statement)?;
+                        }
+                    }
+                } else {
+                    println!("error : {:?}", expression);
+                    return Err(SeeedError::IterateOverArray)
                 }
             }
         }
         Ok(())
     }
 
-    /// expand an expression item to a litteral expression
-    ///
-    /// If the exp is a variable, replace it by its actual value,
-    /// if the exp is a string or here doc : apply the template engine
-    pub(crate) fn expand_expr(&mut self, expr: &Expr) -> Result<Expr, SeeedError> {
-
-        let expr = match expr {
-            Expr::Variable(name) => {
-                let var = self.variables.get(name);
-                match var {
-                    None => {
-                        return Err(SeeedError::UndefinedVar(name.clone()))
+    fn evaluate(&mut self, expression: &Expression) -> Result<Literal, SeeedError> {
+        match expression {
+            Expression::Literal(literal) => {
+                match literal {
+                    Literal::HereDoc(content) => {
+                        Ok(Literal::HereDoc(self.resolve_template(content)?))
                     }
-                    Some(val) => {
-                        val.clone()
+                    Literal::String(content) => {
+                        Ok(Literal::String(self.resolve_template(content)?))
                     }
+                    lit => Ok(lit.clone())
                 }
             }
-            _ => expr.clone(),
-        };
+            Expression::Variable(name) => {
+                let value = self.variables.get(name);
+                match value {
+                    Some(value) => Ok(value.clone()),
+                    None => Err(SeeedError::UndefinedVar(name.clone()))
+                }
 
-        let expr: Result<Expr, SeeedError> = match expr {
-            Expr::String(source) => {
-                Ok(Expr::String(self.resolve_template(&source)?))
             }
-            Expr::HereDoc(doc) => {
-                Ok(Expr::HereDoc(self.resolve_template(&doc)?))
-            }
-            _ => Ok(expr)
-        };
+            Expression::FnCall(name, src_args) => {
+                let args = src_args.iter().map(|arg| self.evaluate(arg)).collect::<Result<Vec<_>, _>>()?;
 
-        Ok(expr?)
+                let result = self.call_builtin_function(name, args)?;
+                Ok(result)
+
+            }
+            Expression::Array(src_array) => {
+                let mut result:Vec<Literal> = vec![];
+                for exp in src_array {
+                    let literal = self.evaluate(exp)?;
+                    result.push(literal);
+                }
+
+                Ok(Literal::Array(result))
+            }
+            Expression::HereDoc(content) => {
+                Ok(Literal::HereDoc(self.resolve_template(content)?))
+            }
+        }
+    }
+
+    fn call_builtin_function(&mut self, name: &str, args: Vec<Literal>) -> Result<Literal, SeeedError> {
+        built_in_functions::execute_function(name, args, self)?;
+        Ok(Literal::Void)
     }
 
 

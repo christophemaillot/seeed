@@ -1,6 +1,18 @@
-let abcd = "test"
+# comment, then an empty line
+# a comment again
 
-echo("message is {{ abcd }} !")
+let root_user = "root"
+let age = 123
+let accounts = ["jdoe", "cmaillot", "jane.doe"]
+
+for account in $accounts {
+
+   +
+   |  mkdir /home/{{account}}
+   |  chown {{account}}:user /home/{{account}}
+   +
+}
+
 
 let conf_file = <<<CONF
 test
@@ -8,6 +20,9 @@ TATA>>>>
 <<<CONF
 toto ti
 CONF>>>
+
+let abc = "yes"
+echo("message is {{ abcd }} !")
 
 # simple exemple to show
 # that is works
@@ -18,7 +33,6 @@ echo("updating the system")
 
 
 | apt-get update
-
 | apt-get install nginx
 
 echo("installing the system")

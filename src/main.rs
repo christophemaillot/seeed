@@ -27,10 +27,12 @@ struct App {
     #[clap(long, short = 'd', help = "use sudo to run the script", default_value_t = false, action)]
     debug: bool,
 
+    #[clap(long,  help = "load environment variables",)]
+    env: Option<String>,
+    
     /// Input files
     file: PathBuf,
 }
-
 
 fn main() -> Result<(), SeeedError> {
 
@@ -43,6 +45,11 @@ fn main() -> Result<(), SeeedError> {
     // read the input file contents
     let contents = std::fs::read_to_string(app.file)?;
     let mut script_context = ScriptContext::new(app.target, app.sudo, contents);
+
+    if let Some(env_file) = app.env {
+        script_context.load_env(&env_file)?;
+    }
+    
     script_context.run(app.debug)?;
 
     Ok(())

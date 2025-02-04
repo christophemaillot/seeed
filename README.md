@@ -7,7 +7,7 @@ There are many other tools out there (ansible, chef, puppet, ...)
 
 ## Installation ##
 
-``cargo install seeed``
+``cargo install --git https://github.com/christophemaillot/seeed.git``
 
 ## language features ##
 
@@ -55,11 +55,8 @@ upload($apache_config, "/etc/apache2/site-available/default")
 Things that I'm planning to add to _seeed_ in a (near) future revision:
 
 - better error handling
-- array type and corresponding for loop
 - use more string slices instead of Strings
 - flags on remote block that tunes the behavior of the remote block (like muting the output, capturing the output to a variable, etc ...)
-- templating support on heredocs and remote blocks
-- load variables content from the local filesystem using yaml files
 - variables object type
 - more builtin functions:
   - _random()_ to generate a random string / password

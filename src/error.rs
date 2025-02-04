@@ -5,8 +5,7 @@ pub enum SeeedError {
 
     #[error("IO error while reading file")]
     IoError(#[from] std::io::Error),
-
-
+    
     #[error("SSH error")]
     SshError(#[from] ssh2::Error),
 
@@ -28,6 +27,13 @@ pub enum SeeedError {
     #[error("undefined variable {0}")]
     UndefinedVar(String),
 
+    #[error("parse error")]
+    ParseError(#[from] pom::Error),
+    
     #[error("template error {0}")]
     Template(#[from] minijinja::Error),
+
+    #[error("can only iterate over an array")]
+    IterateOverArray,
+
 }
