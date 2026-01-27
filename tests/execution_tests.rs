@@ -51,11 +51,9 @@ fn test_execution_simple_remote() {
     context.run(false).unwrap();
 
     let commands = mock.commands.lock().unwrap();
-    // 0: mkdir (setup)
-    // 1: RUN:  echo "hello"
-    assert!(commands.len() >= 2);
-    assert_eq!(commands[0], "mkdir -p /var/lib/seeed/");
-    assert_eq!(commands[1], "RUN:  echo \"hello\"");
+    // 0: RUN:  echo "hello"
+    assert!(commands.len() >= 1);
+    assert_eq!(commands[0], "RUN:  echo \"hello\"");
 }
 
 #[test]
@@ -69,10 +67,9 @@ fn test_loop_execution() {
     context.run(false).unwrap();
 
     let commands = mock.commands.lock().unwrap();
-    // 0: mkdir
-    // 1: echo alice
-    // 2: echo bob
-    assert!(commands.len() >= 3);
+    // 0: echo alice
+    // 1: echo bob
+    assert!(commands.len() >= 2);
     assert!(commands.contains(&"RUN: echo alice".to_string()));
     assert!(commands.contains(&"RUN: echo bob".to_string()));
 }

@@ -6,6 +6,31 @@ use std::thread;
 use colored::Colorize;
 use ssh2::Session;
 use crate::error::SeeedError;
+use std::sync::Arc;
+use ssh2::Sftp;
+
+const REMOTE_TEMP_DIR: &str = "/tmp";
+
+/// RAII guard for remote temporary files
+struct RemoteTempFile {
+    sftp: Arc<Sftp>,
+    path: String,
+}
+
+impl RemoteTempFile {
+    fn new(sftp: Arc<Sftp>, path: String) -> Self {
+        Self { sftp, path }
+    }
+}
+
+impl Drop for RemoteTempFile {
+    fn drop(&mut self) {
+        let path = Path::new(&self.path);
+        // We ignore the error here because we can't really do anything about it in Drop
+        // and we don't want to panic.
+        let _ = self.sftp.unlink(path);
+    }
+}
 
 pub trait RemoteExecutor {
     fn connect(&mut self, target: &str) -> Result<(), SeeedError>;
@@ -116,14 +141,17 @@ impl SshClient {
 
         let session = self.session.as_ref().ok_or(SeeedError::GenericSshError("Session not initialized".to_string()))?.clone();
 
-        let remote_script_path = format!("/var/lib/seeed/script_{}.sh", uuid::Uuid::new_v4());
+        let remote_script_path = format!("{}/script_{}.sh", REMOTE_TEMP_DIR, uuid::Uuid::new_v4());
 
         // upload the script to the remote target
-        let sftp = session.sftp()?;
+        let sftp = Arc::new(session.sftp()?);
         let path = Path::new(remote_script_path.as_str());
         let mut file = sftp.create(path)?;
         file.write_all(script.as_bytes())?;
         file.close()?;
+
+        // RAII guard to ensure the file is removed when this scope ends
+        let _remote_file = RemoteTempFile::new(sftp.clone(), remote_script_path.clone());
 
         // execute the script
         let mut channel = session.channel_session()?;
@@ -214,30 +242,38 @@ impl SshClient {
         // @todo
 
         // remove the script from the remote target
-        sftp.unlink(path)?;
+        // Handled by RemoteTempFile Drop
 
         Ok(())
     }
 
     fn upload_impl(&self, content: &str, dst_path: String) -> Result<(), SeeedError> {
         
-        let effective_dst_path: String = if self.use_sudo {
-            format!("/var/lib/seeed/upload_{}.data", uuid::Uuid::new_v4())
-        } else {
-            dst_path.clone()
-        };
-
         let session = self.session.as_ref().ok_or(SeeedError::GenericSshError("Session not initialized".to_string()))?.clone();
+        let sftp = Arc::new(session.sftp()?);
 
-        let sftp = session.sftp()?;
-        let path = Path::new(effective_dst_path.as_str());
-        let mut file = sftp.create(path)?;
-        file.write_all(content.as_bytes())?;
-        file.close()?;
-
+        // If using sudo, we upload to a temp file first, then move it
         if self.use_sudo {
+            let temp_path = format!("{}/upload_{}.data", REMOTE_TEMP_DIR, uuid::Uuid::new_v4());
+            let path = Path::new(&temp_path);
+            
+            // Create the temporary file
+            let mut file = sftp.create(path)?;
+            file.write_all(content.as_bytes())?;
+            file.close()?;
+
+            // RAII guard will attempt to delete it, but if we move it successfully,
+            // the unlink in Drop will just fail silently (or we can let it fail).
+            let _remote_temp_file = RemoteTempFile::new(sftp.clone(), temp_path.clone());
+
             let mut channel = session.channel_session()?;
-            channel.exec(format!("sudo mv {} {}", effective_dst_path, dst_path).as_str())?;
+            channel.exec(format!("sudo mv {} {}", temp_path, dst_path).as_str())?;
+        } else {
+            // Direct upload
+            let path = Path::new(dst_path.as_str());
+            let mut file = sftp.create(path)?;
+            file.write_all(content.as_bytes())?;
+            file.close()?;
         }
 
         Ok(())

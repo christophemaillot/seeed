@@ -66,11 +66,8 @@ impl ScriptContext {
 
         // instanciate the ssh client
         self.ssh_client.connect(self.target.as_str())?;
-        if self.use_sudo {
-            self.ssh_client.command("sudo mkdir -p /var/lib/seeed/ && sudo chown $(whoami) /var/lib/seeed/ ")?;
-        } else {
-            self.ssh_client.command("mkdir -p /var/lib/seeed/")?;
-        }
+        
+        // No need to create directory manually, sshclient handles temp files in /tmp/
 
 
         // execute the script
