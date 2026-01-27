@@ -27,8 +27,14 @@ pub enum SeeedError {
     #[error("undefined variable {0}")]
     UndefinedVar(String),
 
-    #[error("parse error")]
-    ParseError(#[from] pom::Error),
+    #[error("Parsing error at line {line}:{col}\n{line_content}\n{pointer}\n{message}")]
+    ParseError {
+        message: String,
+        line: usize,
+        col: usize,
+        line_content: String,
+        pointer: String,
+    },
     
     #[error("template error {0}")]
     Template(#[from] minijinja::Error),

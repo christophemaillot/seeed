@@ -43,19 +43,26 @@ fn main() -> Result<(), SeeedError> {
     // parse the command line arguments
     let app = App::parse();
 
-    if let Some(target) = &app.target {
+    // read the input file contents
+    let contents = std::fs::read_to_string(&app.file)?;
+    
+    // parse potential configuration headers in the script
+    let script_config = script::parse_script_headers(&contents);
+
+    let target = app.target.or(script_config.target);
+    let use_sudo = app.sudo || script_config.sudo.unwrap_or(false);
+
+    if let Some(target) = &target {
         console::log(format!("target is {}", target).as_str());
     } else {
-        console::log("no target specified in arguments, will look for 'target' variable in script");
+        console::log("no target specified in arguments or script headers");
     }
-    if app.sudo {
+    if use_sudo {
         console::log("using sudo");
     }
 
-    // read the input file contents
-    let contents = std::fs::read_to_string(app.file)?;
-    let ssh_client = Box::new(seeed::sshclient::SshClient::new(app.sudo));
-    let mut script_context = ScriptContext::new(app.target, app.sudo, contents, ssh_client);
+    let ssh_client = Box::new(seeed::sshclient::SshClient::new(use_sudo));
+    let mut script_context = ScriptContext::new(target, use_sudo, contents, ssh_client);
 
     if let Some(env_file) = app.env {
         script_context.load_env(&env_file)?;

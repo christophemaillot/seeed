@@ -5,6 +5,50 @@ use crate::parser::{script_parser, Expression, Literal, Statement};
 use crate::error::SeeedError;
 use crate::built_in_functions;
 use crate::sshclient::RemoteExecutor;
+use regex::Regex;
+
+/// Configuration extracted from script headers
+#[derive(Debug, Default)]
+pub struct ScriptConfig {
+    pub target: Option<String>,
+    pub sudo: Option<bool>,
+}
+
+/// Parses the script content to extract configuration headers
+///
+/// Headers are extracted from the initial comment block of the script.
+/// The parsing stops at the first non-comment non-empty line.
+///
+/// Supported headers:
+/// - `# @target: <user>@<host>:<port>`
+/// - `# @sudo: <true|false>`
+///
+pub fn parse_script_headers(content: &str) -> ScriptConfig {
+    let mut config = ScriptConfig::default();
+    let re_target = Regex::new(r"^\s*#\s*@target:\s*(.+)$").unwrap();
+    let re_sudo = Regex::new(r"^\s*#\s*@sudo:\s*(true|false)$").unwrap();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if !trimmed.starts_with('#') {
+            break;
+        }
+
+        if let Some(captures) = re_target.captures(trimmed) {
+            config.target = Some(captures.get(1).unwrap().as_str().trim().to_string());
+        }
+
+        if let Some(captures) = re_sudo.captures(trimmed) {
+             let val = captures.get(1).unwrap().as_str();
+             config.sudo = Some(val == "true");
+        }
+    }
+    config
+}
 
 /// The script execution context
 ///
@@ -55,7 +99,39 @@ impl ScriptContext {
 
         // parse the script
         let data = self.contents.as_bytes();
-        let script = script_parser().parse(data)?;
+        let script = script_parser().parse(data).map_err(|e| {
+            let position = match &e {
+                pom::Error::Mismatch { position, .. } => *position,
+                pom::Error::Conversion { position, .. } => *position,
+                pom::Error::Expect { position, .. } => *position,
+                pom::Error::Incomplete => self.contents.len(),
+                pom::Error::Custom { position, .. } => *position,
+            };
+            
+            let mut current_line = 1;
+            let mut last_newline_pos = -1;
+            for (i, c) in self.contents.char_indices() {
+                if i >= position {
+                    break;
+                }
+                if c == '\n' {
+                    current_line += 1;
+                    last_newline_pos = i as i64;
+                }
+            }
+            let current_col = position as i64 - last_newline_pos;
+
+            let line_content = self.contents.lines().nth(current_line - 1).unwrap_or("").to_string();
+            let pointer = " ".repeat((current_col - 1) as usize) + "^";
+
+            SeeedError::ParseError {
+                message: format!("{:?}", e), // pom error usually has some info
+                line: current_line,
+                col: current_col as usize,
+                line_content,
+                pointer,
+            }
+        })?;
 
 
         // if debug flag is set,
@@ -205,8 +281,6 @@ impl ScriptContext {
         // Try to find target in variables if not in struct
         let target = if let Some(target) = &self.target {
             target.clone()
-        } else if let Some(Literal::String(target_var)) = self.variables.get("target") {
-            target_var.clone()
         } else {
              return Err(SeeedError::BadTarget);
         };
