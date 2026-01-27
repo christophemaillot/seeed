@@ -28,14 +28,14 @@ cargo install --git https://github.com/christophemaillot/seeed.git
 Run a seed script against a target server:
 
 ```bash
-seeed --target <user>@<host>[:<port>] <SCRIPT_FILE>
+seeed [--target <user>@<host>[:<port>]] <SCRIPT_FILE>
 ```
 
 ### Options
 
 | Option | Shorthand | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `--target` | `-t` | **Required.** The target host (e.g., `user@192.168.1.10:22`). | - |
+| `--target` | `-t` | The target host (e.g., `user@192.168.1.10:22`). Optional if defined in script. | - |
 | `--sudo` | `-s` | Run the script with `sudo` privileges on the remote host. | `false` |
 | `--shell` | `-e` | The shell to use on the remote host. | `/bin/bash` |
 | `--env` | | Path to an environment file (`.env`) to load variables from. | - |
@@ -57,6 +57,9 @@ Define variables using the `let` keyword. Supported types are strings and arrays
 # String assignment
 let username = "johnsnow"
 
+# Defining the target host within the script
+let target = "admin@myserver.com:2222"
+
 # Array assignment
 let packages = ["nginx", "git", "curl"]
 
@@ -68,6 +71,13 @@ server {
 }
 EOF>>>
 ```
+
+> [!TIP]
+> **Target Resolution**: The target host is resolved in the following order:
+> 1. CLI argument (`--target` or `-t`)
+> 2. `target` variable defined in the script
+>
+> If neither is provided before a remote command is executed, the script will fail.
 
 ### Remote Blocks
 

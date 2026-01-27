@@ -15,24 +15,26 @@ use crate::sshclient::RemoteExecutor;
 /// and provides a set of utility methods
 ///
 pub struct ScriptContext {
-    target: String,
+    target: Option<String>,
     use_sudo: bool,
     contents: String,
     variables: HashMap<String, Literal>,
     pub(crate) ssh_client: Box<dyn RemoteExecutor>,
+    connected: bool,
 }
 
 impl ScriptContext {
 
     /// build a new script context with default parameters
     ///
-    pub fn new(target: String, use_sudo: bool, contents: String, ssh_client: Box<dyn RemoteExecutor>) -> Self {
+    pub fn new(target: Option<String>, use_sudo: bool, contents: String, ssh_client: Box<dyn RemoteExecutor>) -> Self {
         Self {
             target,
             use_sudo,
             contents,
             variables: HashMap::new(),
-            ssh_client
+            ssh_client,
+            connected: false,
         }
     }
 
@@ -65,7 +67,8 @@ impl ScriptContext {
         }
 
         // instanciate the ssh client
-        self.ssh_client.connect(self.target.as_str())?;
+        // self.ssh_client.connect(self.target.as_str())?; -> Moved to lazy connection
+
         
         // No need to create directory manually, sshclient handles temp files in /tmp/
 
@@ -94,10 +97,12 @@ impl ScriptContext {
                 self.variables.insert(name.clone(), literal);
             }
             Statement::RemoteSingle(line) => {
+                self.ensure_connected()?;
                 let line = self.resolve_template(&line)?;
                 self.ssh_client.run(line.as_str())?;
             }
             Statement::Remote(lines) => {
+                self.ensure_connected()?;
                 let line = lines.join("\n");
                 let line = self.resolve_template(&line)?;
 
@@ -190,6 +195,28 @@ impl ScriptContext {
         let result = tmpl.render(&self.variables)?;
         Ok(result)
     }
+
+
+    fn ensure_connected(&mut self) -> Result<(), SeeedError> {
+        if self.connected {
+            return Ok(());
+        }
+
+        // Try to find target in variables if not in struct
+        let target = if let Some(target) = &self.target {
+            target.clone()
+        } else if let Some(Literal::String(target_var)) = self.variables.get("target") {
+            target_var.clone()
+        } else {
+             return Err(SeeedError::BadTarget);
+        };
+
+        println!("Connecting to target: {}", target);
+        self.ssh_client.connect(&target)?;
+        self.connected = true;
+        Ok(())
+    }
+
 }
 
 

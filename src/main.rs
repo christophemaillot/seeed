@@ -20,7 +20,7 @@ struct App {
     sudo: bool,
 
     #[clap(long, short = 't', help = "The target host to run the script on (<user>@<host>:<port>)")]
-    target: String,
+    target: Option<String>,
 
     #[clap(long, short = 'e', help = "The shell to use for the script", default_value_t = String::from("/bin/bash"))]
     shell:String,
@@ -43,7 +43,11 @@ fn main() -> Result<(), SeeedError> {
     // parse the command line arguments
     let app = App::parse();
 
-    console::log(format!("target is {}", app.target).as_str());
+    if let Some(target) = &app.target {
+        console::log(format!("target is {}", target).as_str());
+    } else {
+        console::log("no target specified in arguments, will look for 'target' variable in script");
+    }
     if app.sudo {
         console::log("using sudo");
     }
