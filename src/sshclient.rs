@@ -1,14 +1,40 @@
-use std::io::BufReader;
+
 use std::io::prelude::*;
 use std::net::{TcpStream};
 use std::path::Path;
+use std::thread;
 use colored::Colorize;
-use ssh2::{OpenFlags, OpenType, Session};
+use ssh2::Session;
 use crate::error::SeeedError;
+
+pub trait RemoteExecutor {
+    fn connect(&mut self, target: &str) -> Result<(), SeeedError>;
+    fn command(&self, command: &str) -> Result<(), SeeedError>;
+    fn run(&self, script: &str) -> Result<(), SeeedError>;
+    fn upload(&self, content: &str, dst_path: String) -> Result<(), SeeedError>;
+}
 
 pub struct SshClient {
     session: Option<Session>,
     use_sudo: bool,
+}
+
+impl RemoteExecutor for SshClient {
+    fn connect(&mut self, target: &str) -> Result<(), SeeedError> {
+        self.connect_impl(target)
+    }
+
+    fn command(&self, command: &str) -> Result<(), SeeedError> {
+        self.command_impl(command)
+    }
+
+    fn run(&self, script: &str) -> Result<(), SeeedError> {
+        self.run_impl(script)
+    }
+
+    fn upload(&self, content: &str, dst_path: String) -> Result<(), SeeedError> {
+        self.upload_impl(content, dst_path)
+    }
 }
 
 impl SshClient {
@@ -20,27 +46,21 @@ impl SshClient {
         }
     }
 
-    pub fn connect(&mut self, target: &str) -> Result<(), SeeedError> {
+    fn connect_impl(&mut self, target: &str) -> Result<(), SeeedError> {
 
         // parse target
-        let pattern = regex::Regex::new(r"^(?P<username>[^:@]+)@(?P<hostname>[^:]+)(:(?P<port>\d+))?$").unwrap();
-        let captures = pattern.captures(target);
-        let (username, host, port):(&str, &str, u16) = match captures {
-            Some(captures) => {
-                let host = captures.name("hostname").unwrap().as_str();   // unwrap because we know this wont fail
-                let username = captures.name("username").unwrap().as_str();
+        let pattern = regex::Regex::new(r"^(?P<username>[^:@]+)@(?P<hostname>[^:]+)(:(?P<port>\d+))?$")?;
+        let captures = pattern.captures(target).ok_or(SeeedError::BadTarget)?;
 
-                let port = match captures.name("port") {
-                    Some(port) => port.as_str().parse::<u16>().unwrap(),
-                    None => 22,
-                };
+        let host = captures.name("hostname").ok_or(SeeedError::BadTarget)?.as_str();
+        let username = captures.name("username").ok_or(SeeedError::BadTarget)?.as_str();
 
-                Ok((username, host, port))
-            }
-            None => {
-                Err(SeeedError::BadTarget)
-            }
-        }?;
+        let port = match captures.name("port") {
+            Some(port) => port.as_str().parse::<u16>().map_err(|_| SeeedError::BadTarget)?,
+            None => 22,
+        };
+
+        let (username, host, port) = (username, host, port);
 
         // register the target
         let target = format!("{}:{}",  host, port);
@@ -79,8 +99,8 @@ impl SshClient {
         Ok(())
     }
 
-    pub fn command(&self, command: &str) -> Result<(), SeeedError> {
-        let session = self.session.as_ref().unwrap().clone();
+    fn command_impl(&self, command: &str) -> Result<(), SeeedError> {
+        let session = self.session.as_ref().ok_or(SeeedError::GenericSshError("Session not initialized".to_string()))?.clone();
         let mut channel = session.channel_session()?;
         channel.exec(command)?;
 
@@ -92,9 +112,9 @@ impl SshClient {
         Ok(())
     }
 
-    pub fn run(&self, script: &str) -> Result<(), SeeedError> {
+    fn run_impl(&self, script: &str) -> Result<(), SeeedError> {
 
-        let session = self.session.as_ref().unwrap().clone();
+        let session = self.session.as_ref().ok_or(SeeedError::GenericSshError("Session not initialized".to_string()))?.clone();
 
         let remote_script_path = format!("/var/lib/seeed/script_{}.sh", uuid::Uuid::new_v4());
 
@@ -107,31 +127,91 @@ impl SshClient {
 
         // execute the script
         let mut channel = session.channel_session()?;
-        channel.exec(format!("/bin/bash {}", remote_script_path).as_str())?;
+        if self.use_sudo {
+            channel.exec(format!("sudo /bin/bash {}", remote_script_path).as_str())?;
+        } else {
+            channel.exec(format!("/bin/bash {}", remote_script_path).as_str())?;
+        }
+
 
         // pipe channel to a formater
-        let mut stderr_reader = BufReader::new(channel.stderr());
-        let mut stdout_reader = BufReader::new(channel);
 
-        let mut line = String::new();
+        // pipe channel to a formater
+        // Set non-blocking to true to enable polling
+        session.set_blocking(false);
+
+        let mut stdout_buf: Vec<u8> = Vec::new();
+        let mut stderr_buf: Vec<u8> = Vec::new();
+        let mut buff = [0u8; 1024];
+
+        let mut stdout_done = false;
+        let mut stderr_done = false;
+
         loop {
-            let r = stdout_reader.read_line(&mut line)?;
-            if r == 0 {
+            let mut made_progress = false;
+
+            // Read stdout
+            if !stdout_done {
+                match channel.read(&mut buff) {
+                    Ok(0) => { stdout_done = true; }
+                    Ok(n) => {
+                        made_progress = true;
+                        stdout_buf.extend_from_slice(&buff[..n]);
+                        while let Some(pos) = stdout_buf.iter().position(|&b| b == b'\n') {
+                            let line_bytes = stdout_buf.drain(..=pos).collect::<Vec<u8>>();
+                            let line = String::from_utf8_lossy(&line_bytes);
+                            // Print with newline as originally intended (line includes \n)
+                            print!("   | {}", line.yellow());
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(SeeedError::GenericSshError(e.to_string())),
+                }
+            }
+
+            // Read stderr
+            if !stderr_done {
+                match channel.stderr().read(&mut buff) {
+                    Ok(0) => { stderr_done = true; }
+                    Ok(n) => {
+                        made_progress = true;
+                        stderr_buf.extend_from_slice(&buff[..n]);
+                        while let Some(pos) = stderr_buf.iter().position(|&b| b == b'\n') {
+                            let line_bytes = stderr_buf.drain(..=pos).collect::<Vec<u8>>();
+                            let line = String::from_utf8_lossy(&line_bytes);
+                            print!("   | {}", line.red());
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(SeeedError::GenericSshError(e.to_string())),
+                }
+            }
+
+            if stdout_done && stderr_done {
                 break;
-            } else {
-                print!("   | {}", line.yellow());  // print and not println, line already as the newline
-                line.clear();
+            }
+
+            if !made_progress {
+                thread::sleep(std::time::Duration::from_millis(10));
             }
         }
-        loop {
-            let r = stderr_reader.read_line(&mut line)?;
-            if r == 0 {
-                break;
-            } else {
-                print!("   | {}", line.red());  // print and not println, line already as the newline
-                line.clear();
-            }
+
+        // Print any remaining content in buffers
+        if !stdout_buf.is_empty() {
+            let line = String::from_utf8_lossy(&stdout_buf);
+            print!("   | {}", line.yellow());
+            if !line.ends_with('\n') { println!(); }
         }
+        if !stderr_buf.is_empty() {
+             let line = String::from_utf8_lossy(&stderr_buf);
+             print!("   | {}", line.red());
+             if !line.ends_with('\n') { println!(); }
+        }
+
+        session.set_blocking(true);
+
+        // wait for the script to finish
+        // @todo
 
         // remove the script from the remote target
         sftp.unlink(path)?;
@@ -139,14 +219,26 @@ impl SshClient {
         Ok(())
     }
 
-    pub(crate) fn upload(&self, content: &str, dst_path: String) -> Result<(), SeeedError> {
-        let session = self.session.as_ref().unwrap().clone();
+    fn upload_impl(&self, content: &str, dst_path: String) -> Result<(), SeeedError> {
+        
+        let effective_dst_path: String = if self.use_sudo {
+            format!("/var/lib/seeed/upload_{}.data", uuid::Uuid::new_v4())
+        } else {
+            dst_path.clone()
+        };
+
+        let session = self.session.as_ref().ok_or(SeeedError::GenericSshError("Session not initialized".to_string()))?.clone();
 
         let sftp = session.sftp()?;
-        let path = Path::new(dst_path.as_str());
+        let path = Path::new(effective_dst_path.as_str());
         let mut file = sftp.create(path)?;
         file.write_all(content.as_bytes())?;
         file.close()?;
+
+        if self.use_sudo {
+            let mut channel = session.channel_session()?;
+            channel.exec(format!("sudo mv {} {}", effective_dst_path, dst_path).as_str())?;
+        }
 
         Ok(())
     }

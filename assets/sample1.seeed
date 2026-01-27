@@ -24,7 +24,7 @@ CONF>>>
 let abc = "yes"
 echo("message is {{ abcd }} !")
 
-# simple exemple to show
+# simple example to show
 # that is works
 
 echo("hello world")

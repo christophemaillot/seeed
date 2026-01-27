@@ -36,4 +36,18 @@ pub enum SeeedError {
     #[error("can only iterate over an array")]
     IterateOverArray,
 
+    #[error("UTF-8 conversion error")]
+    Utf8Error(#[from] std::string::FromUtf8Error),
+    
+    #[error("UTF-8 conversion error")]
+    Utf8ErrorSlice(#[from] std::str::Utf8Error),
+
+    #[error("Regex error")]
+    RegexError(#[from] regex::Error),
+
+    #[error("SSH error: {0}")]
+    GenericSshError(String),
+    
+    #[error("Channel communication error")]
+    ChannelError(String),
 }

@@ -1,9 +1,9 @@
 use crate::console;
 use crate::error::SeeedError;
-use crate::parser::{Expression, Literal};
+use crate::parser::Literal;
 use crate::script::ScriptContext;
 
-fn execute_echo(args:Vec<Literal>, script_context: &mut ScriptContext) -> Result<(), SeeedError> {
+fn execute_echo(args:Vec<Literal>, _script_context: &mut ScriptContext) -> Result<(), SeeedError> {
     for arg in args {
         console::message(arg.to_string().as_str())
     }
@@ -17,12 +17,8 @@ fn execute_upload(args:Vec<Literal>, script_context: &mut ScriptContext) -> Resu
         return Err(SeeedError::WrongArgCount(2, args.len()));
     }
 
-    let source = args.get(0).unwrap();  // unwrap because args length was checked previously
-
-
-    //let source = script_context.expand_expr(&source)?;
-
-    let target = args.get(1).unwrap();  // unwrap because args length was checked previously
+    let source = args.get(0).ok_or(SeeedError::BadArgument("missing source argument"))?;
+    let target = args.get(1).ok_or(SeeedError::BadArgument("missing target argument"))?;
 
     // check source type
     match source {

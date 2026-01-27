@@ -5,8 +5,9 @@ use std::fmt::{Debug, Display, Formatter};
 use pom::char_class::{alpha, alphanum, hex_digit};
 use pom::Error;
 use pom::parser::{call, Parser};
-use pom::parser::{is_a, none_of,  one_of, seq, sym, list};
+use pom::parser::{is_a, none_of,  one_of, seq, sym, list, end};
 use serde::{Serialize, Serializer};
+use log::error;
 
 #[derive(Debug)]
 pub struct ScriptAST {
@@ -21,7 +22,7 @@ impl ScriptAST {
 
 #[derive(Debug, Clone)]
 pub enum Statement {
-    Comment(String),
+    Comment(),
     EmptyLine(),
     Assign(String, Expression),
     RemoteSingle(String),
@@ -90,12 +91,6 @@ impl Serialize for Literal {
 // https://medium.com/pragmalang/parsing-the-world-with-rust-and-pom-77e0e8b5313d
 // https://github.com/J-F-Liu/pom/issues/49
 
-// TODO : string literal and string expression are 2 concepts (string expression can have variables)
-// same goes for array expression (array of expression) and array literal (array of literal)
-// same goes for object
-// so that every expression can be evaluated to a literal
-// TODO : remove some unwrap() using convert()
-
 
 // ┌───────────────────────────────────────────────────────────────────────────────────────────┐ //
 // │                             parser extensions                                             │ //
@@ -116,7 +111,8 @@ pub fn until<'a>(needle: String) -> Parser<'a, u8, String>
                 Err(Error::Incomplete)
             }
             Some(position) => {
-                Ok((from_utf8(&input[start..position + start ]).unwrap().to_owned(), start + position + 1 + needle.len()))
+                let s = from_utf8(&input[start..position + start ]).map_err(|_| Error::Mismatch { message: "Invalid UTF-8 sequence".to_owned(), position: start })?;
+                Ok((s.to_owned(), start + position + 1 + needle.len()))
             }
         }
     })
@@ -149,7 +145,7 @@ fn integer<'a>() -> Parser<'a, u8, i64> {
 ///
 /// Parses a number (including floating point numbers)
 /// returns a parser that returns a f64 if parsed correctly
-fn number<'a>() -> Parser<'a, u8, f64> {
+fn _number<'a>() -> Parser<'a, u8, f64> {
     let integer = one_of(b"123456789") - one_of(b"0123456789").repeat(0..) | sym(b'0');
     let frac = sym(b'.') + one_of(b"0123456789").repeat(1..);
     let exp = one_of(b"eE") + one_of(b"+-").opt() + one_of(b"0123456789").repeat(1..);
@@ -176,7 +172,10 @@ fn string<'a>() -> Parser<'a, u8, String> {
 ///
 /// parse a generic identifier : starts with an alphanumeric or underscore,
 fn identifier<'a>() -> Parser<'a, u8, String> {
-    ((is_a(alpha) | sym(b'_')) + (is_a(alphanum) | sym(b'_')).repeat(0..)).map(|(prefix, rest)| format!("{}{}", prefix as char,  String::from_utf8(rest).unwrap()))
+    ((is_a(alpha) | sym(b'_')) + (is_a(alphanum) | sym(b'_')).repeat(0..)).map(|(prefix, rest)| {
+        let rest_str = String::from_utf8(rest).unwrap_or_else(|_| String::new()); // Should be safe as alphanum is ASCII
+        format!("{}{}", prefix as char, rest_str)
+    })
 }
 
 // ┌───────────────────────────────────────────────────────────────────────────────────────────┐ //
@@ -246,7 +245,7 @@ fn emptyline_statement<'a>() -> Parser<'a, u8, Statement> {
 
 fn comment_statement<'a>() -> Parser<'a, u8, Statement> {
     let till_end = none_of(b"\n").repeat(0..);
-    let comment = (sym(b'#') *  till_end.collect().convert(from_utf8).map(|s| Statement::Comment(s.to_owned()))) - sym(b'\n');
+    let comment = (sym(b'#') *  till_end.collect().convert(from_utf8).map(|_s| Statement::Comment())) - sym(b'\n');
     comment
 }
 
@@ -286,6 +285,7 @@ fn for_loop_statement<'a>() -> Parser<'a, u8, Statement> {
     parser.map(|((name, exp), statements)|  Statement::ForLoop(name, exp, statements))
 }
 
+
 fn statement<'a>() -> Parser<'a, u8, Statement> {
     comment_statement() | emptyline_statement() | assign_statement() | function_call_statement() | single_remote_statement() | multi_remote_statement() | for_loop_statement()
 }
@@ -294,7 +294,7 @@ fn statement<'a>() -> Parser<'a, u8, Statement> {
 // │                                script parser                                              │ //
 // └───────────────────────────────────────────────────────────────────────────────────────────┘ //
 
-pub(crate) fn script_parser<'a>() -> Parser<'a, u8, ScriptAST> {
-    let script = statement().repeat(0..) - sym(b'\n').opt();
+pub fn script_parser<'a>() -> Parser<'a, u8, ScriptAST> {
+    let script = statement().repeat(0..) -(sym(b'\n').opt()) - end();
     script.map(ScriptAST::from)
 }

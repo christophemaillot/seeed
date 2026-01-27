@@ -14,3 +14,4 @@ minijinja = "2.5.0"
 env-file-reader = "0.3.0"
 pom = "3.4.0"
 serde = { version = "1.0.216", features = ["derive"] }
+log = "0.4.25"

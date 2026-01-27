@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use colored::Colorize;
 use minijinja::Environment;
 
 use crate::parser::{script_parser, Expression, Literal, Statement};
 use crate::error::SeeedError;
 use crate::built_in_functions;
-use crate::sshclient::SshClient;
+use crate::sshclient::RemoteExecutor;
 
 /// The script execution context
 ///
@@ -20,25 +19,25 @@ pub struct ScriptContext {
     use_sudo: bool,
     contents: String,
     variables: HashMap<String, Literal>,
-    pub(crate) ssh_client: SshClient,
+    pub(crate) ssh_client: Box<dyn RemoteExecutor>,
 }
 
 impl ScriptContext {
 
     /// build a new script context with default parameters
     ///
-    pub fn new(target: String, use_sudo: bool, contents: String) -> Self {
+    pub fn new(target: String, use_sudo: bool, contents: String, ssh_client: Box<dyn RemoteExecutor>) -> Self {
         Self {
             target,
             use_sudo,
             contents,
             variables: HashMap::new(),
-            ssh_client: SshClient::new(use_sudo)
+            ssh_client
         }
     }
 
     /// Loads a environment file and sets the corresponding variables
-    pub(crate) fn load_env(&mut self, filename: &str) -> Result<(), SeeedError> {
+    pub fn load_env(&mut self, filename: &str) -> Result<(), SeeedError> {
         let env_variables = env_file_reader::read_file(filename)?;
 
         env_variables.iter().for_each(|(name, value)| {
@@ -50,10 +49,12 @@ impl ScriptContext {
 
     /// Main method that runs the script
     ///
-    pub(crate) fn run(&mut self, debug: bool) -> Result<(), SeeedError> {
+    pub fn run(&mut self, debug: bool) -> Result<(), SeeedError> {
 
         // parse the script
-        let script = script_parser().parse(self.contents.as_bytes())?;
+        let data = self.contents.as_bytes();
+        let script = script_parser().parse(data)?;
+
 
         // if debug flag is set,
         if debug {
@@ -65,7 +66,12 @@ impl ScriptContext {
 
         // instanciate the ssh client
         self.ssh_client.connect(self.target.as_str())?;
-        self.ssh_client.command("mkdir -p /var/lib/seeed/")?;
+        if self.use_sudo {
+            self.ssh_client.command("sudo mkdir -p /var/lib/seeed/ && sudo chown $(whoami) /var/lib/seeed/ ")?;
+        } else {
+            self.ssh_client.command("mkdir -p /var/lib/seeed/")?;
+        }
+
 
         // execute the script
         for statement in script.statements {
@@ -78,7 +84,7 @@ impl ScriptContext {
     fn execute_statement(&mut self, statement: &Statement) -> Result<(), SeeedError> {
         match statement {
 
-            Statement::Comment(_) => {
+            Statement::Comment() => {
                 // nothing to do
             }
 
@@ -87,11 +93,12 @@ impl ScriptContext {
             }
 
             Statement::Assign(name, expression) => {
-                let literal = self.evaluate(&expression)?;
+                let literal = self.evaluate(expression)?;
                 self.variables.insert(name.clone(), literal);
             }
             Statement::RemoteSingle(line) => {
-                println!("    | {}", line.blue().bold());
+                let line = self.resolve_template(&line)?;
+                self.ssh_client.run(line.as_str())?;
             }
             Statement::Remote(lines) => {
                 let line = lines.join("\n");
