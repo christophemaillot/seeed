@@ -35,11 +35,18 @@ fn execute_upload(args:Vec<Literal>, script_context: &mut ScriptContext) -> Resu
 
     match source {
         Literal::HereDoc(content) => {
-            script_context.ssh_client.upload(content.as_str(), target.to_string())?;
+            script_context.ssh_client.upload(content.as_bytes(), target.to_string())?;
         },
         Literal::String(file_path) => {
-            let contents = std::fs::read_to_string(file_path)?;
-            script_context.ssh_client.upload(contents.as_str(), target.to_string())?;
+            match std::fs::read(file_path) {
+                Ok(contents) => {   
+                    script_context.ssh_client.upload(&contents, target.to_string())?;
+                },
+                Err(e) => {
+                    println!("could not load file content: {}", e);
+                    return Err(SeeedError::BadArgument("loading failed"))
+                }
+            }
         },
         _ => return Err(SeeedError::BadArgument("could not load file content")),
     };
@@ -47,12 +54,37 @@ fn execute_upload(args:Vec<Literal>, script_context: &mut ScriptContext) -> Resu
     Ok(())
 }
 
+fn execute_exec(args: Vec<Literal>, _script_context: &mut ScriptContext) -> Result<(), SeeedError> {
+    if args.len() != 1 {
+        return Err(SeeedError::WrongArgCount(1, args.len()));
+    }
+
+    let command = args[0].to_string();
+
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .status()
+        .map_err(|_| SeeedError::BadArgument("Failed to execute command"))?;
+
+    if !status.success() {
+        return Err(SeeedError::BadArgument("Command execution failed"));
+    }
+
+    Ok(())
+}
+
 pub fn execute_function(name: &str, args: Vec<Literal>, script_context: &mut ScriptContext) -> Result<(), SeeedError> {
 
+    println!("Executing function: '{}'", name);
     match name {
         "echo" => execute_echo(args, script_context)?,
         "upload" => execute_upload(args, script_context)?,
-        &_ => return Err(SeeedError::UnknownFunction())
+        "exec" => execute_exec(args, script_context)?,
+        &_ => {
+            println!("Unknown function: {}", name);
+            return Err(SeeedError::UnknownFunction())
+        }
     }
     Ok(())
 }

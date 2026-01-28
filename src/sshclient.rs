@@ -36,7 +36,7 @@ pub trait RemoteExecutor {
     fn connect(&mut self, target: &str) -> Result<(), SeeedError>;
     fn command(&self, command: &str) -> Result<(), SeeedError>;
     fn run(&self, script: &str) -> Result<(), SeeedError>;
-    fn upload(&self, content: &str, dst_path: String) -> Result<(), SeeedError>;
+    fn upload(&self, content: &[u8], dst_path: String) -> Result<(), SeeedError>;
 }
 
 pub struct SshClient {
@@ -57,7 +57,7 @@ impl RemoteExecutor for SshClient {
         self.run_impl(script)
     }
 
-    fn upload(&self, content: &str, dst_path: String) -> Result<(), SeeedError> {
+    fn upload(&self, content: &[u8], dst_path: String) -> Result<(), SeeedError> {
         self.upload_impl(content, dst_path)
     }
 }
@@ -247,7 +247,7 @@ impl SshClient {
         Ok(())
     }
 
-    fn upload_impl(&self, content: &str, dst_path: String) -> Result<(), SeeedError> {
+    fn upload_impl(&self, content: &[u8], dst_path: String) -> Result<(), SeeedError> {
         
         let session = self.session.as_ref().ok_or(SeeedError::GenericSshError("Session not initialized".to_string()))?.clone();
         let sftp = Arc::new(session.sftp()?);
@@ -259,7 +259,7 @@ impl SshClient {
             
             // Create the temporary file
             let mut file = sftp.create(path)?;
-            file.write_all(content.as_bytes())?;
+            file.write_all(content)?;
             file.close()?;
 
             // RAII guard will attempt to delete it, but if we move it successfully,
@@ -272,7 +272,7 @@ impl SshClient {
             // Direct upload
             let path = Path::new(dst_path.as_str());
             let mut file = sftp.create(path)?;
-            file.write_all(content.as_bytes())?;
+            file.write_all(content)?;
             file.close()?;
         }
 
