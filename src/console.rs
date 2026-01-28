@@ -9,7 +9,7 @@ pub fn log(msg: &str) {
 
 #[allow(dead_code)]
 pub fn error(msg: &str) {
-    println!("· ❌ · {}", msg.bright_yellow());
+    println!("🚨 {}", msg.red());
 }
 
 pub fn message(msg: &str) {

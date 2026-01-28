@@ -73,7 +73,7 @@ fn main() -> Result<(), SeeedError> {
     match result {
         Ok(_) => console::log("script completed successfully"),
         Err(seeed_error)  => {
-            console::log(format!("script execution failed : {}", seeed_error).as_str());
+            console::error(format!("script execution failed : {}", seeed_error).as_str());
         }
     }
 

@@ -29,6 +29,7 @@ pub enum Statement {
     Remote(Vec<String>),
     FnCall(String, Vec<Expression>),
     ForLoop(String, Expression, Vec<Statement>),
+    Error(String, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -285,9 +286,42 @@ fn for_loop_statement<'a>() -> Parser<'a, u8, Statement> {
     parser.map(|((name, exp), statements)|  Statement::ForLoop(name, exp, statements))
 }
 
+fn pos<'a>() -> Parser<'a, u8, usize> {
+    Parser::new(move |_, position| Ok((position, position)))
+}
+
+fn bad_function_call_statement<'a>() -> Parser<'a, u8, Statement> {
+    let p = pos();
+    let parser = p + identifier() - spaces() - sym(b'(') + none_of(b"\n").repeat(0..).collect().convert(from_utf8) - sym(b'\n').opt();
+
+    parser.map(|((pos, name), rest)| {
+         Statement::Error(format!("Invalid function call syntax: {}({}", name, rest), pos)
+    })
+}
+
+fn check_not_closing_brace<'a>() -> Parser<'a, u8, ()> {
+    Parser::new(move |input: &'a [u8], start: usize| {
+        let mut i = start;
+        while i < input.len() && (input[i] == b' ' || input[i] == b'\t') {
+            i += 1;
+        }
+        if i < input.len() && input[i] == b'}' {
+            Err(pom::Error::Mismatch { message: "Found closing brace".to_owned(), position: i })
+        } else {
+            Ok(((), start))
+        }
+    })
+}
+
+fn error_statement<'a>() -> Parser<'a, u8, Statement> {
+    let p = pos();
+    let line = none_of(b"\n").repeat(1..).collect().convert(from_utf8);
+    (check_not_closing_brace() * p + line - sym(b'\n').opt()).map(|(pos, s)| Statement::Error(format!("Unknown command or syntax error: {}", s), pos))
+}
+
 
 fn statement<'a>() -> Parser<'a, u8, Statement> {
-    comment_statement() | emptyline_statement() | assign_statement() | function_call_statement() | single_remote_statement() | multi_remote_statement() | for_loop_statement()
+    comment_statement() | emptyline_statement() | assign_statement() | function_call_statement() | single_remote_statement() | multi_remote_statement() | for_loop_statement() | bad_function_call_statement() | error_statement()
 }
 
 // ┌───────────────────────────────────────────────────────────────────────────────────────────┐ //

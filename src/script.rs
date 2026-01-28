@@ -108,30 +108,30 @@ impl ScriptContext {
                 pom::Error::Custom { position, .. } => *position,
             };
             
-            let mut current_line = 1;
-            let mut last_newline_pos = -1;
-            for (i, c) in self.contents.char_indices() {
-                if i >= position {
-                    break;
-                }
-                if c == '\n' {
-                    current_line += 1;
-                    last_newline_pos = i as i64;
-                }
-            }
-            let current_col = position as i64 - last_newline_pos;
-
-            let line_content = self.contents.lines().nth(current_line - 1).unwrap_or("").to_string();
-            let pointer = " ".repeat((current_col - 1) as usize) + "^";
+            let (current_line, current_col, line_content, pointer) = self.get_error_context(position);
 
             SeeedError::ParseError {
                 message: format!("{:?}", e), // pom error usually has some info
                 line: current_line,
-                col: current_col as usize,
+                col: current_col,
                 line_content,
                 pointer,
             }
         })?;
+
+        // Check for syntax errors captured by the parser
+        for statement in &script.statements {
+             if let Statement::Error(content, pos) = statement {
+                 let (line, col, line_content, pointer) = self.get_error_context(*pos);
+                 return Err(SeeedError::ParseError {
+                     message: content.clone(),
+                     line,
+                     col,
+                     line_content,
+                     pointer,
+                 });
+             }
+        }
 
 
         // if debug flag is set,
@@ -211,6 +211,10 @@ impl ScriptContext {
                     return Err(SeeedError::IterateOverArray)
                 }
             }
+            Statement::Error(content, _) => {
+                // Should be unreachable if run() checks for errors first
+                panic!("Executing error statement: {}", content);
+            }
         }
         Ok(())
     }
@@ -289,6 +293,26 @@ impl ScriptContext {
         self.ssh_client.connect(&target)?;
         self.connected = true;
         Ok(())
+    }
+
+    fn get_error_context(&self, position: usize) -> (usize, usize, String, String) {
+        let mut current_line = 1;
+        let mut last_newline_pos = -1;
+        for (i, c) in self.contents.char_indices() {
+            if i >= position {
+                break;
+            }
+            if c == '\n' {
+                current_line += 1;
+                last_newline_pos = i as i64;
+            }
+        }
+        let current_col = position as i64 - last_newline_pos;
+
+        let line_content = self.contents.lines().nth(current_line - 1).unwrap_or("").to_string();
+        let pointer = " ".repeat((current_col - 1) as usize) + "^";
+        
+        (current_line, current_col as usize, line_content, pointer)
     }
 
 }
